@@ -1,0 +1,8 @@
+scheduler:
+  timezone: Asia/Seoul
+
+jobs:
+  - job_name: hello_job
+    schedule_type: interval
+    seconds: 10
+    func: hello_job
