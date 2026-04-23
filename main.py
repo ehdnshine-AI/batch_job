@@ -1,12 +1,14 @@
-﻿import logging
+import logging
 import os
 import time
+from configparser import ConfigParser
 from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
 
 import yaml
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from sqlalchemy.engine import URL
 
 import job_funcs as jobs
 
@@ -47,9 +49,39 @@ def load_config():
         return yaml.safe_load(f)
 
 
+def load_database_config():
+    config_path = os.path.join("config", "database.ini")
+    parser = ConfigParser()
+
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(f"File not found: {config_path}")
+
+    parser.read(config_path, encoding="utf-8")
+
+    if not parser.has_section("postgresql"):
+        raise ValueError(f"Missing [postgresql] section in {config_path}")
+
+    db_config = parser["postgresql"]
+    required_keys = ["host", "port", "database", "user", "password"]
+    missing_keys = [key for key in required_keys if not db_config.get(key)]
+
+    if missing_keys:
+        missing = ", ".join(missing_keys)
+        raise ValueError(f"Missing required settings in {config_path}: {missing}")
+
+    return URL.create(
+        "postgresql+psycopg2",
+        username=db_config["user"],
+        password=db_config["password"],
+        host=db_config["host"],
+        port=int(db_config["port"]),
+        database=db_config["database"],
+    )
+
+
 def get_job_function(func_name):
     if not hasattr(jobs, func_name):
-        raise ValueError(f"{func_name} 함수가 job_funcs.py에 없음")
+        raise ValueError(f"Function '{func_name}' was not found in job_funcs.py")
     return getattr(jobs, func_name)
 
 
@@ -62,7 +94,7 @@ def execute_job(func_name, job_name):
         func()
         logger.info(f"[END] {job_name}")
     except Exception as e:
-        logger.exception(f"[ERROR] {job_name} 실행 실패: {e}")
+        logger.exception(f"[ERROR] {job_name} execution failed: {e}")
 
 
 def register_jobs(scheduler, config):
@@ -99,33 +131,32 @@ def register_jobs(scheduler, config):
                 replace_existing=True,
             )
         else:
-            raise ValueError(f"지원하지 않는 스케줄 타입: {schedule_type}")
+            raise ValueError(f"Unsupported schedule type: {schedule_type}")
 
-        logging.info(f"Job 등록 완료: {job_name}")
+        logging.info(f"Job registered successfully: {job_name}")
 
 
 def main():
     setup_logger()
     config = load_config()
-
-    os.makedirs("db", exist_ok=True)
+    database_url = load_database_config()
 
     jobstores = {
-        "default": SQLAlchemyJobStore(url="sqlite:///db/scheduler.db")
+        "default": SQLAlchemyJobStore(url=database_url)
     }
     scheduler = BackgroundScheduler(jobstores=jobstores)
 
     register_jobs(scheduler, config)
     scheduler.start()
 
-    logging.info("Scheduler 시작")
+    logging.info("Scheduler started")
 
     try:
         while True:
             time.sleep(5)
     except (KeyboardInterrupt, SystemExit):
         scheduler.shutdown()
-        logging.info("Scheduler 종료")
+        logging.info("Scheduler stopped")
 
 
 if __name__ == "__main__":
